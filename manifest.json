@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "OCR Translator",
+  "version": "1.0",
+  "description": "Capture a screen area, OCR and translate it using a local LLM.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "clipboardWrite",
+    "clipboardRead",
+    "offscreen"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "http://192.168.219.107:1234/"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content.css"]
+    }
+  ],
+  "options_page": "options.html",
+  "action": {
+    "default_title": "OCR Translator Options",
+    "default_popup": "options.html"
+  },
+  "icons": {
+    "16": "images/icon16.svg",
+    "48": "images/icon48.svg",
+    "128": "images/icon128.svg"
+  }
+}
