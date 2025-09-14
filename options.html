@@ -189,14 +189,26 @@ character_name=角色名"></textarea>
     </div>
 
     <div class="card">
-        <label class="checkbox-label">
-            <input type="checkbox" id="autoClickPaste">
-            <span>Enable Auto Click & Paste</span>
-        </label>
+        <fieldset class="form-group" id="resultActionGroup">
+            <legend>Result Action</legend>
+            <div class="radio-group">
+                <label>
+                    <input type="radio" name="resultAction" value="clipboard" checked>
+                    <span>Clipboard</span>
+                </label>
+                <label>
+                    <input type="radio" name="resultAction" value="paste">
+                    <span>Auto Paste</span>
+                </label>
+                <label>
+                    <input type="radio" name="resultAction" value="popup">
+                    <span>Show Popup</span>
+                </label>
+            </div>
+        </fieldset>
     </div>
 
-    <button id="save">Save Settings</button>
-    <div id="status"></div>
+    
 
     <script src="options.js"></script>
 </body>

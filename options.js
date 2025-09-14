@@ -1,17 +1,49 @@
-function save_options() {
-    // Process glossary for token efficiency before saving
-    let processedGlossary = document.getElementById('glossary').value;
-    
-    // Aggressive compacting:
-    processedGlossary = processedGlossary
-        .split('\n')
-        .map(line => line.trim())
-        .filter(line => line.length > 0)
-        .map(line => line.replace(/\s+/g, ' ')) // Replace multiple spaces with single space
-        .map(line => line.replace(/\s*=\s*/g, '=')) // Remove spaces around =
-        .join(';'); // Join with semicolon for compactness
+// Debounce function to limit how often a function can run
+function debounce(func, delay) {
+    let timeout;
+    return function(...args) {
+        const context = this;
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(context, args), delay);
+    };
+}
 
-    // Save non-glossary options to sync storage
+// --- Status Notifier ---
+let statusTimeout;
+function showStatus(message, duration = 1500) {
+    let statusDiv = document.getElementById('autoSaveStatus');
+    if (!statusDiv) {
+        statusDiv = document.createElement('div');
+        statusDiv.id = 'autoSaveStatus';
+        statusDiv.style.position = 'fixed';
+        statusDiv.style.bottom = '20px';
+        statusDiv.style.left = '50%';
+        statusDiv.style.transform = 'translateX(-50%)';
+        statusDiv.style.padding = '10px 20px';
+        statusDiv.style.backgroundColor = '#27ae60';
+        statusDiv.style.color = 'white';
+        statusDiv.style.borderRadius = '5px';
+        statusDiv.style.zIndex = '2147483647';
+        statusDiv.style.opacity = '0';
+        statusDiv.style.transition = 'opacity 0.3s ease';
+        document.body.appendChild(statusDiv);
+    }
+
+    if (statusTimeout) clearTimeout(statusTimeout);
+
+    statusDiv.textContent = message;
+    statusDiv.style.opacity = '1';
+
+    statusTimeout = setTimeout(() => {
+        statusDiv.style.opacity = '0';
+    }, duration);
+}
+
+// --- Save & Restore Options ---
+function save_options() {
+    const resultAction = document.querySelector('input[name="resultAction"]:checked').value;
+    const glossary = document.getElementById('glossary').value;
+
     chrome.storage.sync.set({
         modelProvider: document.getElementById('modelProvider').value,
         apiKey: document.getElementById('apiKey').value,
@@ -19,28 +51,18 @@ function save_options() {
         extractionMode: document.getElementById('extractionMode').value,
         sourceLang: document.getElementById('sourceLang').value,
         targetLang: document.getElementById('targetLang').value,
-        autoClickPaste: document.getElementById('autoClickPaste').checked
-    }, function() {
-        const status = document.getElementById('status');
+        resultAction: resultAction
+    }, () => {
         if (chrome.runtime.lastError) {
-            status.textContent = 'Error saving general options: ' + chrome.runtime.lastError.message;
-            status.style.color = 'red';
-            console.error('Error saving general options:', chrome.runtime.lastError);
+            console.error('Error saving sync settings:', chrome.runtime.lastError);
         } else {
-            // Save glossary to local storage (larger quota)
-            chrome.storage.local.set({
-                glossary: processedGlossary
-            }, function() {
-                if (chrome.runtime.lastError) {
-                    status.textContent = 'Error saving glossary: ' + chrome.runtime.lastError.message;
-                    status.style.color = 'red';
-                    console.error('Error saving glossary:', chrome.runtime.lastError);
-                } else {
-                    status.textContent = 'Options saved.';
-                    status.style.color = 'green';
-                }
-                setTimeout(() => { status.textContent = ''; status.style.color = ''; }, 3000);
-            });
+            showStatus('Saved!');
+        }
+    });
+
+    chrome.storage.local.set({ glossary: glossary }, () => {
+        if (chrome.runtime.lastError) {
+            console.error('Error saving local settings:', chrome.runtime.lastError);
         }
     });
 }
@@ -49,11 +71,11 @@ function restore_options() {
     chrome.storage.sync.get({
         modelProvider: 'lmstudio',
         apiKey: '',
-        modelName: 'gemini-2.5-flash', // Default to a valid model
+        modelName: 'gemini-2.5-flash',
         extractionMode: 'translate',
         sourceLang: '',
         targetLang: 'zh-TW',
-        autoClickPaste: false
+        resultAction: 'clipboard'
     }, function(items) {
         document.getElementById('modelProvider').value = items.modelProvider;
         document.getElementById('apiKey').value = items.apiKey;
@@ -61,42 +83,64 @@ function restore_options() {
         document.getElementById('extractionMode').value = items.extractionMode;
         document.getElementById('sourceLang').value = items.sourceLang;
         document.getElementById('targetLang').value = items.targetLang;
-        document.getElementById('autoClickPaste').checked = items.autoClickPaste;
+        
+        const radioToCheck = document.querySelector(`input[name="resultAction"][value="${items.resultAction}"]`);
+        if (radioToCheck) radioToCheck.checked = true;
         
         updateUI(items.modelProvider);
+    });
+
+    chrome.storage.local.get({ glossary: '' }, function(items) {
+        document.getElementById('glossary').value = items.glossary;
     });
 }
 
 function updateUI(provider) {
     const apiKeyGroup = document.getElementById('apiKeyGroup');
     const modelNameGroup = document.getElementById('modelNameGroup');
-    const modelNameSelect = document.getElementById('modelName'); // Get the select element
+    const modelNameSelect = document.getElementById('modelName');
 
-    // Clear existing options first
     modelNameSelect.innerHTML = '';
 
     if (provider === 'lmstudio') {
         apiKeyGroup.classList.add('hidden');
         modelNameGroup.classList.add('hidden');
-        // LM Studio uses a generic local-model name
         modelNameSelect.innerHTML = '<option value="local-model">local-model</option>';
     } else if (provider === 'gemini') {
         apiKeyGroup.classList.remove('hidden');
         modelNameGroup.classList.remove('hidden');
-        // Specific options for Gemini models
         modelNameSelect.innerHTML = `
-            <option value=\"gemini-2.5-flash\">gemini-2.5-flash</option>
-            <option value=\"gemini-2.5-flash-lite\">gemini-2.5-flash-lite</option>
+            <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+            <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
         `;
-    } else { // Fallback for any other future providers
+    } else {
         apiKeyGroup.classList.remove('hidden');
-        modelNameGroup.classList.add('hidden'); // Ensure modelName is hidden for unknown providers
+        modelNameGroup.classList.add('hidden');
         modelNameSelect.innerHTML = '<option value="">Select Model</option>';
     }
 }
 
-document.addEventListener('DOMContentLoaded', restore_options);
-document.getElementById('save').addEventListener('click', save_options);
-document.getElementById('modelProvider').addEventListener('change', (e) => {
-    updateUI(e.target.value);
+// --- Event Listeners ---
+document.addEventListener('DOMContentLoaded', () => {
+    restore_options();
+
+    const debouncedSave = debounce(save_options, 400);
+
+    const inputs = ['apiKey', 'glossary'];
+    inputs.forEach(id => {
+        document.getElementById(id).addEventListener('input', debouncedSave);
+    });
+
+    const selects = ['modelProvider', 'modelName', 'extractionMode', 'sourceLang', 'targetLang'];
+    selects.forEach(id => {
+        document.getElementById(id).addEventListener('change', save_options);
+    });
+
+    document.querySelectorAll('input[name="resultAction"]').forEach(radio => {
+        radio.addEventListener('change', save_options);
+    });
+
+    document.getElementById('modelProvider').addEventListener('change', (e) => {
+        updateUI(e.target.value);
+    });
 });

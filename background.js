@@ -11,11 +11,11 @@ let _offscreenReadyPromise = null; // Stores the promise itself
 const PROMPTS = {
     OCR_ONLY: {
         SYSTEM: `You are an expert at accurately extracting all text from an image.`, 
-        USER: `Extract all text from the image. Preserve original line breaks and spacing. Do not add or remove unnecessary spaces or line breaks. Preserve the layout and structure of the text. Output only the extracted text. Do not add any other explanations or introductory phrases.`
+        USER: `Extract all text from the image. Preserve original line breaks and spacing. Do not add or remove unnecessary spaces or line breaks. Preserve the layout and structure of the text. Output only the extracted text. Do not add any other explanations or introductory phrases. IMPORTANT: Do not wrap the output in any kind of quotes (", ").`
     },
     TRANSLATE: {
         SYSTEM: `You are an expert at accurately extracting text from images and translating it into the specified language.`, 
-        USER: `Extract all text from the image. Preserve original line breaks and spacing. Do not add or remove unnecessary spaces or line breaks. Preserve the layout and structure of the text. Translate all information from the original without omission. Do not summarize or paraphrase the content; translate while preserving the original meaning and information as much as possible. Translate to a length similar to the original. Maintain original line breaks, but adjust them naturally to fit the grammar and readability of the target language. Provide only the translated text as output. Remove any unnecessary explanations.\n\nSource Language: {sourceLang}\nTarget Language: {targetLang}\nGlossary:\n{glossary}`
+        USER: `Extract all text from the image. Preserve original line breaks and spacing. Do not add or remove unnecessary spaces or line breaks. Preserve the layout and structure of the text. Translate all information from the original without omission. Do not summarize or paraphrase the content; translate while preserving the original meaning and information as much as possible. Translate to a length similar to the original. Maintain original line breaks, but adjust them naturally to fit the grammar and readability of the target language. Provide only the translated text as output. Remove any unnecessary explanations. IMPORTANT: Do not wrap the output in any kind of quotes (", ").\n\nSource Language: {sourceLang}\nTarget Language: {targetLang}\nGlossary:\n{glossary}`
     }
 };
 
@@ -27,8 +27,7 @@ chrome.runtime.onInstalled.addListener(() => {
         extractionMode: 'translate',
         sourceLang: '',
         targetLang: 'zh-TW', // Default target language
-        glossary: '',
-        autoClickPaste: false
+        resultAction: 'clipboard' // New default
     }, (items) => {
         // Set default target language to browser's UI language on first install
         if (items.targetLang === 'zh-TW') { // Only if it's still the hardcoded default
@@ -55,6 +54,7 @@ chrome.runtime.onInstalled.addListener(() => {
             }
             items.targetLang = detectedTargetLang;
         }
+        // After potentially modifying items, set them back.
         chrome.storage.sync.set(items);
     });
 });
@@ -66,53 +66,56 @@ async function captureAndTranslate(request) {
         const { area, coords } = request;
         activeTab = await getActiveTab();
         if (!activeTab) throw new Error("No active tab found.");
-        console.log("[OCR BG] Active tab found.");
 
         const screenDataUrl = await chrome.tabs.captureVisibleTab(null, { format: 'png' });
-        console.log("[OCR BG] Screen captured.");
+        
         const settings = await chrome.storage.sync.get([
             'modelProvider', 'apiKey', 'modelName',
-            'extractionMode', 'sourceLang', 'targetLang', 'glossary', 'autoClickPaste'
+            'extractionMode', 'sourceLang', 'targetLang', 'resultAction'
         ]);
-        console.log("[OCR BG] Settings loaded.");
+        const { glossary } = await chrome.storage.local.get('glossary');
+        settings.glossary = glossary; // Combine settings
 
-        // 디버깅 코드 제거하고 단일 crop 호출로 변경
-        const croppedResult = await cropImage(screenDataUrl, area);
-        
-        // 반환값 타입에 따른 안전한 처리
-        let croppedDataUrl;
-        if (typeof croppedResult === 'string') {
-            croppedDataUrl = croppedResult;
-        } else if (croppedResult && croppedResult.dataUrl) {
-            croppedDataUrl = croppedResult.dataUrl;
-        } else {
-            throw new Error("Invalid crop result format.");
-        }
+        console.log("[OCR BG] Settings loaded:", settings);
+
+        const croppedDataUrl = await cropImage(screenDataUrl, area);
 
         if (!croppedDataUrl || croppedDataUrl === 'data:,') {
             throw new Error("Failed to crop a valid image.");
         }
-        console.log("[OCR BG] Image cropped. Proceeding to API call.");
+        console.log("[OCR BG] Image cropped.");
 
+        // Validate request size
+        const imageSizeInBytes = Math.ceil(croppedDataUrl.length * (3 / 4));
+        const glossarySizeInBytes = new TextEncoder().encode(settings.glossary).length;
+        const totalSizeInMB = (imageSizeInBytes + glossarySizeInBytes) / (1024 * 1024);
 
-        // Add retry logic for API call
+        if (totalSizeInMB > 1) {
+            const errorMessage = `Error: Request size exceeds 1MB (${totalSizeInMB.toFixed(2)}MB)`;
+            chrome.tabs.sendMessage(activeTab.id, {
+                action: 'showCustomToast',
+                message: errorMessage,
+                duration: 5000
+            });
+            throw new Error(errorMessage);
+        }
+
         let resultText = '';
-        const MAX_RETRIES = 1; // Try once, then retry once
+        const MAX_RETRIES = 1;
         for (let i = 0; i <= MAX_RETRIES; i++) {
             try {
                 console.log(`[OCR BG] Attempt ${i + 1} to call LLM API.`);
                 resultText = await callLlmApi(croppedDataUrl, settings);
                 if (resultText) {
                     console.log("[OCR BG] API call successful.");
-                    break; // Break loop if successful
+                    break;
                 }
             } catch (apiError) {
                 console.error(`[OCR BG] API call attempt ${i + 1} failed:`, apiError);
                 if (i < MAX_RETRIES) {
-                    console.log("[OCR BG] Retrying API call in 500ms...");
-                    await new Promise(resolve => setTimeout(resolve, 500)); // Short delay before retry
+                    await new Promise(resolve => setTimeout(resolve, 500));
                 } else {
-                    throw apiError; // Re-throw if all retries fail
+                    throw apiError;
                 }
             }
         }
@@ -132,14 +135,25 @@ async function captureAndTranslate(request) {
         });
         console.log("[OCR BG] Translation success message sent.");
 
-        if (settings.autoClickPaste) {
-            chrome.tabs.sendMessage(activeTab.id, {
-                action: 'autoClickPaste',
-                coords: { x: coords.startX, y: coords.startY }
-            });
-            console.log("[OCR BG] Auto-click-paste message sent.");
+        // Perform action based on user setting
+        console.log(`[OCR BG] Performing result action: ${settings.resultAction}`);
+        switch (settings.resultAction) {
+            case 'paste':
+                chrome.tabs.sendMessage(activeTab.id, {
+                    action: 'autoClickPaste',
+                    coords: { x: coords.startX, y: coords.startY }
+                });
+                console.log("[OCR BG] Auto-click-paste message sent.");
+                break;
+            case 'popup':
+                chrome.tabs.sendMessage(activeTab.id, {
+                    action: 'showResultPopup',
+                    text: resultText,
+                    coords: { startX: coords.startX, startY: coords.startY }
+                });
+                console.log("[OCR BG] Show result popup message sent.");
+                break;
         }
-
     } catch (error) {
         console.error("OCR Translator Error:", error);
 

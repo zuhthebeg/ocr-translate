@@ -7,8 +7,7 @@ const DRAG_THRESHOLD = 5; // Minimum pixels to move to be considered a drag
 
 console.log("[OCR] Content script loaded.");
 
-// --- Toast Notification Logic ---
-let toastTimer = null;
+// --- UI Management ---
 function showToast(message, duration = 3000) {
     let toast = document.querySelector('.ocr-translator-toast');
     if (!toast) {
@@ -19,13 +18,26 @@ function showToast(message, duration = 3000) {
     toast.textContent = message;
     toast.classList.add('show');
 
-    if (toastTimer) {
-        clearTimeout(toastTimer);
-    }
-
-    toastTimer = setTimeout(() => {
+    const toastTimer = setTimeout(() => {
         toast.classList.remove('show');
     }, duration);
+}
+
+function showLoader(coords) {
+    hideLoader(); // Ensure no multiple loaders
+    const loader = document.createElement('div');
+    loader.className = 'ocr-translator-loader';
+    // Position loader at the start of the drag, slightly offset
+    loader.style.left = `${coords.startX + 15}px`;
+    loader.style.top = `${coords.startY + 15}px`;
+    document.body.appendChild(loader);
+}
+
+function hideLoader() {
+    const loader = document.querySelector('.ocr-translator-loader');
+    if (loader) {
+        loader.remove();
+    }
 }
 
 // --- Overlay Logic ---
@@ -87,10 +99,10 @@ window.addEventListener('mousemove', (e) => {
 
 window.addEventListener('mouseup', (e) => {
     potentialDrag = false;
-    if (!isDragging) return; // Not a drag, do nothing.
+    if (!isDragging) return;
 
     if (e.button === 2) {
-        dragJustFinished = true; // Set flag for contextmenu listener
+        dragJustFinished = true;
         isDragging = false;
         removeOverlay();
 
@@ -101,32 +113,14 @@ window.addEventListener('mouseup', (e) => {
         let width = Math.abs(startX - endX);
         let height = Math.abs(startY - endY);
 
-        // Adjust for device pixel ratio
         const dpr = window.devicePixelRatio || 1;
         x *= dpr;
         y *= dpr;
         width *= dpr;
         height *= dpr;
 
-        // --- Visual Debugging: Show captured area ---
-        const debugOverlay = document.createElement('div');
-        debugOverlay.className = 'ocr-translator-debug-overlay';
-        debugOverlay.style.left = `${Math.min(startX, endX)}px`;
-        debugOverlay.style.top = `${Math.min(startY, endY)}px`;
-        debugOverlay.style.width = `${Math.abs(startX - endX)}px`;
-        debugOverlay.style.height = `${Math.abs(startY - endY)}px`;
-        document.body.appendChild(debugOverlay);
-        setTimeout(() => debugOverlay.remove(), 3000); // Remove after 3 seconds
-        // --- End Visual Debugging ---
-
-        // --- Logging Captured Coordinates ---
-        console.log(`[OCR] Captured Area (DPR Corrected): x=${x}, y=${y}, width=${width}, height=${height}`);
-        console.log(`[OCR] Raw Coords: startX=${startX}, startY=${startY}, endX=${endX}, endY=${endY}`);
-        console.log(`[OCR] Device Pixel Ratio: ${dpr}`);
-        // --- End Logging ---
-
         if (width > 10 && height > 10) {
-            showToast('Translating...', 2000);
+            showLoader({ startX, startY });
             const captureRequest = {
                 action: "capture",
                 area: { x, y, width, height },
@@ -140,20 +134,26 @@ window.addEventListener('mouseup', (e) => {
 window.addEventListener('contextmenu', (e) => {
     if (dragJustFinished) {
         e.preventDefault();
-        dragJustFinished = false; // Reset the flag
+        dragJustFinished = false;
     }
 });
 
 window.addEventListener('keydown', (e) => {
-    if ((isDragging || potentialDrag) && e.key === 'Escape') {
-        isDragging = false;
-        potentialDrag = false;
-        removeOverlay();
+    // Cancel drag or loading with Escape key
+    if (e.key === 'Escape') {
+        if (isDragging || potentialDrag) {
+            isDragging = false;
+            potentialDrag = false;
+            removeOverlay();
+        }
+        hideLoader();
     }
 });
 
 // --- Listener for messages from background script ---
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    hideLoader(); // Hide loader on any final response from background
+
     if (request.action === 'translationSuccess') {
         const truncatedText = request.text.length > 50 ? request.text.substring(0, 50) + '...' : request.text;
         showToast(`Copied: "${truncatedText}"`, 4000);
@@ -162,28 +162,35 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const elementAtPoint = document.elementFromPoint(x, y);
 
         if (elementAtPoint) {
-            const targetContainer = elementAtPoint.closest('.translation-imgs') || elementAtPoint.closest('#trans-t');
-            const elementToClick = targetContainer || elementAtPoint;
-
-            console.log("[OCR] Simulating a click on:", elementToClick);
-
-            const clickEvent = new MouseEvent('click', {
-                bubbles: true,
-                cancelable: true,
-                view: window,
-                clientX: x,
-                clientY: y
-            });
-            elementToClick.dispatchEvent(clickEvent);
-
-            setTimeout(() => {
-                console.log("[OCR] Attempting to execute paste command.");
-                document.execCommand('paste');
-            }, 1000);
-
+            const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y });
+            elementAtPoint.dispatchEvent(clickEvent);
+            setTimeout(() => document.execCommand('paste'), 100);
         } else {
             console.error("[OCR] Could not find an element to click at the specified coordinates.");
         }
+    } else if (request.action === 'showResultPopup') {
+        const { text, coords } = request;
+        const existingPopup = document.querySelector('.ocr-translator-result-popup');
+        if (existingPopup) existingPopup.remove();
+
+        const popup = document.createElement('div');
+        popup.className = 'ocr-translator-result-popup';
+        popup.style.top = `${coords.startY}px`;
+        popup.style.left = `${coords.startX}px`;
+
+        const textDiv = document.createElement('div');
+        textDiv.className = 'ocr-translator-result-popup-text';
+        textDiv.textContent = text;
+
+        const closeButton = document.createElement('button');
+        closeButton.className = 'ocr-translator-result-popup-close';
+
+        popup.appendChild(textDiv);
+        popup.appendChild(closeButton);
+        document.body.appendChild(popup);
+
+        closeButton.addEventListener('click', () => popup.remove());
+
     } else if (request.action === 'showCustomToast') {
         showToast(request.message, request.duration);
     }

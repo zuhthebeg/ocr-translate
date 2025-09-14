@@ -90,6 +90,11 @@
 | `/v1/plan/check` | POST | `userId`, `planType` | `allowed`, `remaining` | 사용량 및 요금제 유효성 검증 |
 | `/v1/callback/log` | POST | `userId`, `status`, `meta` | `status` | 콜백 실행 결과 로깅 |
 
+#### 5.2.1. `/v1/translate` 수행 절차
+
+1.  **요청 크기 검증:** `imageBase64`와 `glossary`의 총 크기가 1MB를 초과하면, `413 Payload Too Large` 오류를 반환합니다.
+2.  **OCR 및 번역:** 이미지에서 텍스트를 추출하고, 용어집을 적용하여 지정된 언어로 번역합니다.
+
 ### 5.3. AI 모델 및 프롬프트 전략
 
 - **모델:** `Gemini 2.5 Flash` (멀티모달, 단일 패스 OCR+번역)
