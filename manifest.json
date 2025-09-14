@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
   "name": "OCR Translator",
-  "version": "1.0",
+  "version": "1.0.0",
+  "author": "cocy@kakao.com",
   "description": "Capture a screen area, OCR and translate it using a local LLM.",
   "permissions": [
     "activeTab",
@@ -32,8 +33,8 @@
     "default_popup": "options.html"
   },
   "icons": {
-    "16": "images/icon16.svg",
-    "48": "images/icon48.svg",
-    "128": "images/icon128.svg"
+    "16": "images/icon16.png",
+    "48": "images/icon48.png",
+    "128": "images/icon128.png"
   }
 }

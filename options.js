@@ -10,7 +10,7 @@ function debounce(func, delay) {
 
 // --- Status Notifier ---
 let statusTimeout;
-function showStatus(message, duration = 1500) {
+function showStatus(message, isError = false, duration = 2000) {
     let statusDiv = document.getElementById('autoSaveStatus');
     if (!statusDiv) {
         statusDiv = document.createElement('div');
@@ -20,8 +20,6 @@ function showStatus(message, duration = 1500) {
         statusDiv.style.left = '50%';
         statusDiv.style.transform = 'translateX(-50%)';
         statusDiv.style.padding = '10px 20px';
-        statusDiv.style.backgroundColor = '#27ae60';
-        statusDiv.style.color = 'white';
         statusDiv.style.borderRadius = '5px';
         statusDiv.style.zIndex = '2147483647';
         statusDiv.style.opacity = '0';
@@ -32,6 +30,7 @@ function showStatus(message, duration = 1500) {
     if (statusTimeout) clearTimeout(statusTimeout);
 
     statusDiv.textContent = message;
+    statusDiv.style.backgroundColor = isError ? '#e74c3c' : '#27ae60';
     statusDiv.style.opacity = '1';
 
     statusTimeout = setTimeout(() => {
@@ -40,21 +39,46 @@ function showStatus(message, duration = 1500) {
 }
 
 // --- Save & Restore Options ---
-function save_options() {
+async function save_options() {
+    const localServerAddress = document.getElementById('localServerAddress').value.trim();
+    const modelProvider = document.getElementById('modelProvider').value;
+
+    // If using lmstudio, request permission for the origin
+    if (modelProvider === 'lmstudio' && localServerAddress) {
+        try {
+            const url = new URL(localServerAddress);
+            const origin = url.origin + '/'; // Permissions need a trailing slash
+
+            const granted = await chrome.permissions.request({ origins: [origin] });
+
+            if (granted) {
+                showStatus('Permission granted!');
+            } else {
+                showStatus('Permission denied.', true);
+            }
+        } catch (e) {
+            showStatus('Invalid URL format.', true);
+            console.error("Invalid URL for permission request:", e);
+            return; // Stop saving if URL is invalid
+        }
+    }
+
     const resultAction = document.querySelector('input[name="resultAction"]:checked').value;
     const glossary = document.getElementById('glossary').value;
 
     chrome.storage.sync.set({
-        modelProvider: document.getElementById('modelProvider').value,
+        modelProvider: modelProvider,
         apiKey: document.getElementById('apiKey').value,
         modelName: document.getElementById('modelName').value,
         extractionMode: document.getElementById('extractionMode').value,
         sourceLang: document.getElementById('sourceLang').value,
         targetLang: document.getElementById('targetLang').value,
-        resultAction: resultAction
+        resultAction: resultAction,
+        localServerAddress: localServerAddress
     }, () => {
         if (chrome.runtime.lastError) {
             console.error('Error saving sync settings:', chrome.runtime.lastError);
+            showStatus('Error saving!', true);
         } else {
             showStatus('Saved!');
         }
@@ -75,7 +99,8 @@ function restore_options() {
         extractionMode: 'translate',
         sourceLang: '',
         targetLang: 'zh-TW',
-        resultAction: 'clipboard'
+        resultAction: 'clipboard',
+        localServerAddress: 'http://localhost:1234'
     }, function(items) {
         document.getElementById('modelProvider').value = items.modelProvider;
         document.getElementById('apiKey').value = items.apiKey;
@@ -83,6 +108,7 @@ function restore_options() {
         document.getElementById('extractionMode').value = items.extractionMode;
         document.getElementById('sourceLang').value = items.sourceLang;
         document.getElementById('targetLang').value = items.targetLang;
+        document.getElementById('localServerAddress').value = items.localServerAddress;
         
         const radioToCheck = document.querySelector(`input[name="resultAction"][value="${items.resultAction}"]`);
         if (radioToCheck) radioToCheck.checked = true;
@@ -98,13 +124,16 @@ function restore_options() {
 function updateUI(provider) {
     const apiKeyGroup = document.getElementById('apiKeyGroup');
     const modelNameGroup = document.getElementById('modelNameGroup');
+    const localServerGroup = document.getElementById('localServerGroup');
     const modelNameSelect = document.getElementById('modelName');
 
     modelNameSelect.innerHTML = '';
+    apiKeyGroup.classList.add('hidden');
+    modelNameGroup.classList.add('hidden');
+    localServerGroup.classList.add('hidden');
 
     if (provider === 'lmstudio') {
-        apiKeyGroup.classList.add('hidden');
-        modelNameGroup.classList.add('hidden');
+        localServerGroup.classList.remove('hidden');
         modelNameSelect.innerHTML = '<option value="local-model">local-model</option>';
     } else if (provider === 'gemini') {
         apiKeyGroup.classList.remove('hidden');
@@ -113,10 +142,6 @@ function updateUI(provider) {
             <option value="gemini-2.5-flash">gemini-2.5-flash</option>
             <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
         `;
-    } else {
-        apiKeyGroup.classList.remove('hidden');
-        modelNameGroup.classList.add('hidden');
-        modelNameSelect.innerHTML = '<option value="">Select Model</option>';
     }
 }
 
@@ -124,15 +149,15 @@ function updateUI(provider) {
 document.addEventListener('DOMContentLoaded', () => {
     restore_options();
 
-    const debouncedSave = debounce(save_options, 400);
+    const debouncedSave = debounce(save_options, 500);
 
-    const inputs = ['apiKey', 'glossary'];
+    const inputs = ['apiKey', 'glossary', 'localServerAddress'];
     inputs.forEach(id => {
         document.getElementById(id).addEventListener('input', debouncedSave);
     });
 
-    const selects = ['modelProvider', 'modelName', 'extractionMode', 'sourceLang', 'targetLang'];
-    selects.forEach(id => {
+    const changes = ['modelName', 'extractionMode', 'sourceLang', 'targetLang'];
+    changes.forEach(id => {
         document.getElementById(id).addEventListener('change', save_options);
     });
 
@@ -142,5 +167,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('modelProvider').addEventListener('change', (e) => {
         updateUI(e.target.value);
+        save_options(); // Also save when provider changes
     });
 });
