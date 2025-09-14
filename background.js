@@ -3,6 +3,22 @@ const OFFSCREEN_DOCUMENT_PATH = '/offscreen.html';
 const GEMINI_MODELS = ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
 const LMSTUDIO_MODELS = ['local-model'];
 
+// Global variables for offscreen document readiness handshake
+let _offscreenReadyResolve = null; // Stores the resolve function of the promise
+let _offscreenReadyPromise = null; // Stores the promise itself
+
+// PROMPTS object embedded directly to avoid module loading issues
+const PROMPTS = {
+    OCR_ONLY: {
+        SYSTEM: `You are an expert at accurately extracting all text from an image.`, 
+        USER: `Extract all text from the image. Preserve original line breaks and spacing. Do not add or remove unnecessary spaces or line breaks. Preserve the layout and structure of the text. Output only the extracted text. Do not add any other explanations or introductory phrases.`
+    },
+    TRANSLATE: {
+        SYSTEM: `You are an expert at accurately extracting text from images and translating it into the specified language.`, 
+        USER: `Extract all text from the image. Preserve original line breaks and spacing. Do not add or remove unnecessary spaces or line breaks. Preserve the layout and structure of the text. Translate all information from the original without omission. Do not summarize or paraphrase the content; translate while preserving the original meaning and information as much as possible. Translate to a length similar to the original. Maintain original line breaks, but adjust them naturally to fit the grammar and readability of the target language. Provide only the translated text as output. Remove any unnecessary explanations.\n\nSource Language: {sourceLang}\nTarget Language: {targetLang}\nGlossary:\n{glossary}`
+    }
+};
+
 chrome.runtime.onInstalled.addListener(() => {
     chrome.storage.sync.get({
         modelProvider: 'lmstudio',
@@ -44,42 +60,84 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 async function captureAndTranslate(request) {
-    let activeTab; // Declare activeTab outside try block
+    let activeTab;
     try {
+        console.log("[OCR BG] Starting captureAndTranslate.");
         const { area, coords } = request;
-        activeTab = await getActiveTab(); // Assign here
+        activeTab = await getActiveTab();
         if (!activeTab) throw new Error("No active tab found.");
+        console.log("[OCR BG] Active tab found.");
 
         const screenDataUrl = await chrome.tabs.captureVisibleTab(null, { format: 'png' });
+        console.log("[OCR BG] Screen captured.");
         const settings = await chrome.storage.sync.get([
             'modelProvider', 'apiKey', 'modelName',
             'extractionMode', 'sourceLang', 'targetLang', 'glossary', 'autoClickPaste'
         ]);
+        console.log("[OCR BG] Settings loaded.");
 
-        const croppedDataUrl = await cropImage(screenDataUrl, area);
+        // 디버깅 코드 제거하고 단일 crop 호출로 변경
+        const croppedResult = await cropImage(screenDataUrl, area);
+        
+        // 반환값 타입에 따른 안전한 처리
+        let croppedDataUrl;
+        if (typeof croppedResult === 'string') {
+            croppedDataUrl = croppedResult;
+        } else if (croppedResult && croppedResult.dataUrl) {
+            croppedDataUrl = croppedResult.dataUrl;
+        } else {
+            throw new Error("Invalid crop result format.");
+        }
+
         if (!croppedDataUrl || croppedDataUrl === 'data:,') {
             throw new Error("Failed to crop a valid image.");
         }
+        console.log("[OCR BG] Image cropped. Proceeding to API call.");
 
-        const resultText = await callLlmApi(croppedDataUrl, settings);
-        if (!resultText) throw new Error("Result text is empty.");
+
+        // Add retry logic for API call
+        let resultText = '';
+        const MAX_RETRIES = 1; // Try once, then retry once
+        for (let i = 0; i <= MAX_RETRIES; i++) {
+            try {
+                console.log(`[OCR BG] Attempt ${i + 1} to call LLM API.`);
+                resultText = await callLlmApi(croppedDataUrl, settings);
+                if (resultText) {
+                    console.log("[OCR BG] API call successful.");
+                    break; // Break loop if successful
+                }
+            } catch (apiError) {
+                console.error(`[OCR BG] API call attempt ${i + 1} failed:`, apiError);
+                if (i < MAX_RETRIES) {
+                    console.log("[OCR BG] Retrying API call in 500ms...");
+                    await new Promise(resolve => setTimeout(resolve, 500)); // Short delay before retry
+                } else {
+                    throw apiError; // Re-throw if all retries fail
+                }
+            }
+        }
+
+        if (!resultText) throw new Error("Result text is empty after API calls.");
 
         await chrome.scripting.executeScript({
             target: { tabId: activeTab.id },
             func: copyToClipboard,
             args: [resultText]
         });
+        console.log("[OCR BG] Text copied to clipboard.");
 
         chrome.tabs.sendMessage(activeTab.id, { 
             action: 'translationSuccess', 
             text: resultText 
         });
+        console.log("[OCR BG] Translation success message sent.");
 
         if (settings.autoClickPaste) {
             chrome.tabs.sendMessage(activeTab.id, {
                 action: 'autoClickPaste',
                 coords: { x: coords.startX, y: coords.startY }
             });
+            console.log("[OCR BG] Auto-click-paste message sent.");
         }
 
     } catch (error) {
@@ -135,6 +193,13 @@ async function captureAndTranslate(request) {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === "capture") {
         captureAndTranslate(request);
+    } else if (request.action === 'offscreenReady') {
+        // Resolve the promise when offscreen document signals readiness
+        if (_offscreenReadyResolve) {
+            _offscreenReadyResolve(); // Call the stored resolve function
+            _offscreenReadyResolve = null; // Clear for next use
+            _offscreenReadyPromise = null; // Clear the promise too
+        }
     }
 });
 
@@ -145,6 +210,7 @@ async function cropImage(dataUrl, area) {
             if (msg.action === 'cropImageResult') {
                 chrome.runtime.onMessage.removeListener(listener);
                 if (msg.dataUrl) {
+                    // 일관성을 위해 dataUrl 문자열만 반환
                     resolve(msg.dataUrl);
                 } else {
                     reject(new Error(msg.error || 'Failed to crop image in offscreen document.'));
@@ -152,23 +218,31 @@ async function cropImage(dataUrl, area) {
             }
         };
         chrome.runtime.onMessage.addListener(listener);
+        
         chrome.runtime.sendMessage({ 
             action: 'cropImage',
-            dataUrl, 
+            dataUrl,
             area 
         });
     }).finally(() => chrome.offscreen.closeDocument());
 }
 
+
 async function setupOffscreenDocument(path) {
     const existingContexts = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
     if (existingContexts.length > 0) return;
 
+    _offscreenReadyPromise = new Promise(resolve => {
+        _offscreenReadyResolve = resolve;
+    });
+
     await chrome.offscreen.createDocument({
         url: path,
-        reasons: ['DOM_PARSER'],
+        reasons: ['DOM_PARSER'], // 원래대로 복원
         justification: 'Image cropping requires DOM APIs (Canvas).'
     });
+
+    await _offscreenReadyPromise;
 }
 
 // --- LLM API Dispatcher ---
@@ -196,11 +270,14 @@ async function _callLmStudioApi(imageDataUrl, settings) {
     const processedGlossary = settings.glossary ?? ''; // Ensure it's a string
 
     if (settings.extractionMode === 'ocr_only') {
-        systemPrompt = `You are an expert at accurately extracting all text from an image.\nRules:\n1. Extract all text from the image.\n2. Output only the extracted text. Do not add any other explanations or introductory phrases.`;
-        userPrompt = `Extract the text from this image.`;
+        systemPrompt = PROMPTS.OCR_ONLY.SYSTEM;
+        userPrompt = PROMPTS.OCR_ONLY.USER;
     } else { // Default to translate
-        systemPrompt = `당신은 이미지 속 텍스트를 정확히 추출하고, 지정된 언어로 번역하는 전문가입니다.\n규칙:\n1. 이미지에서 모든 텍스트를 추출합니다.\n2. 출발언어가 지정되지 않으면 자동 감지합니다.\n3. 대상언어로 번역합니다. (기본: 繁體中文)\n4. 번역 시 아래 용어집을 반드시 반영합니다.\n5. 출력은 번역문만 제공합니다. 불필요한 설명은 제거합니다.`;
-        userPrompt = `출발언어: ${settings.sourceLang || '자동 감지'}\n대상언어: ${settings.targetLang || '繁體中文'}\n용어집:\n${processedGlossary}`;
+        systemPrompt = PROMPTS.TRANSLATE.SYSTEM;
+        userPrompt = PROMPTS.TRANSLATE.USER
+            .replace('{sourceLang}', settings.sourceLang || 'Auto-detect')
+            .replace('{targetLang}', settings.targetLang || '繁體中文')
+            .replace('{glossary}', processedGlossary);
     }
 
     const response = await fetch("http://192.168.219.107:1234/v1/chat/completions", {
@@ -247,11 +324,14 @@ async function _callGeminiApi(imageDataUrl, settings) {
     const processedGlossary = settings.glossary ?? ''; // Ensure it's a string
 
     if (settings.extractionMode === 'ocr_only') {
-        userPromptParts.push({ text: `You are an expert at accurately extracting all text from an image. Rules: 1. Extract all text from the image. 2. Output only the extracted text. Do not add any other explanations or introductory phrases.` });
-        userPromptParts.push({ text: `Extract the text from this image.` });
+        userPromptParts.push({ text: PROMPTS.OCR_ONLY.SYSTEM });
+        userPromptParts.push({ text: PROMPTS.OCR_ONLY.USER });
     } else {
-        userPromptParts.push({ text: `You are an expert at accurately extracting text from images and translating it into the specified language. Rules: 1. Extract all text from the image. 2. If a source language is not specified, auto-detect it. 3. Translate to the target language. (Default: Traditional Chinese) 4. Strictly apply the glossary below during translation. 5. Provide only the translated text as output. Remove any unnecessary explanations.` });
-        userPromptParts.push({ text: `Source Language: ${settings.sourceLang || 'Auto-detect'}\nTarget Language: ${settings.targetLang || 'Traditional Chinese'}\nGlossary:\n${processedGlossary}` });
+        userPromptParts.push({ text: PROMPTS.TRANSLATE.SYSTEM });
+        userPromptParts.push({ text: PROMPTS.TRANSLATE.USER
+            .replace('{sourceLang}', settings.sourceLang || 'Auto-detect')
+            .replace('{targetLang}', settings.targetLang || '繁體中文')
+            .replace('{glossary}', processedGlossary) });
     }
 
     userPromptParts.push({

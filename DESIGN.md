@@ -70,9 +70,9 @@
     "default_popup": "options.html"
   },
   "icons": {
-    "16": "images/icon16.png",
-    "48": "images/icon48.png",
-    "128": "images/icon128.png"
+    "16": "images/icon16.svg",
+    "48": "images/icon48.svg",
+    "128": "images/icon128.svg"
   }
 }
 ```

@@ -16,7 +16,8 @@
     "http://192.168.219.107:1234/"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "content_scripts": [
     {

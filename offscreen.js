@@ -21,3 +21,6 @@ chrome.runtime.onMessage.addListener((request) => {
     image.src = dataUrl;
   }
 });
+
+// Signal that the offscreen document is ready
+chrome.runtime.sendMessage({ action: 'offscreenReady' });

@@ -96,10 +96,34 @@ window.addEventListener('mouseup', (e) => {
 
         const endX = e.clientX;
         const endY = e.clientY;
-        const x = Math.min(startX, endX);
-        const y = Math.min(startY, endY);
-        const width = Math.abs(startX - endX);
-        const height = Math.abs(startY - endY);
+        let x = Math.min(startX, endX);
+        let y = Math.min(startY, endY);
+        let width = Math.abs(startX - endX);
+        let height = Math.abs(startY - endY);
+
+        // Adjust for device pixel ratio
+        const dpr = window.devicePixelRatio || 1;
+        x *= dpr;
+        y *= dpr;
+        width *= dpr;
+        height *= dpr;
+
+        // --- Visual Debugging: Show captured area ---
+        const debugOverlay = document.createElement('div');
+        debugOverlay.className = 'ocr-translator-debug-overlay';
+        debugOverlay.style.left = `${Math.min(startX, endX)}px`;
+        debugOverlay.style.top = `${Math.min(startY, endY)}px`;
+        debugOverlay.style.width = `${Math.abs(startX - endX)}px`;
+        debugOverlay.style.height = `${Math.abs(startY - endY)}px`;
+        document.body.appendChild(debugOverlay);
+        setTimeout(() => debugOverlay.remove(), 3000); // Remove after 3 seconds
+        // --- End Visual Debugging ---
+
+        // --- Logging Captured Coordinates ---
+        console.log(`[OCR] Captured Area (DPR Corrected): x=${x}, y=${y}, width=${width}, height=${height}`);
+        console.log(`[OCR] Raw Coords: startX=${startX}, startY=${startY}, endX=${endX}, endY=${endY}`);
+        console.log(`[OCR] Device Pixel Ratio: ${dpr}`);
+        // --- End Logging ---
 
         if (width > 10 && height > 10) {
             showToast('Translating...', 2000);
@@ -152,21 +176,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             });
             elementToClick.dispatchEvent(clickEvent);
 
-            setTimeout(async () => {
-                try {
-                    const textToPaste = await navigator.clipboard.readText();
-                    const activeElement = document.activeElement;
-                    
-                    if (activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA')) {
-                        console.log("[OCR] Pasting text into focused element:", activeElement);
-                        activeElement.value = textToPaste;
-                        activeElement.dispatchEvent(new Event('input', { bubbles: true }));
-                    } else {
-                        console.error("[OCR] No active input/textarea found to paste into.");
-                    }
-                } catch (err) {
-                    console.error("[OCR] Paste failed. Permissions issue?", err);
-                }
+            setTimeout(() => {
+                console.log("[OCR] Attempting to execute paste command.");
+                document.execCommand('paste');
             }, 1000);
 
         } else {
