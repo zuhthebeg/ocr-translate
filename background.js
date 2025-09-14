@@ -1,5 +1,8 @@
 const OFFSCREEN_DOCUMENT_PATH = '/offscreen.html';
 
+const GEMINI_MODELS = ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+const LMSTUDIO_MODELS = ['local-model'];
+
 chrome.runtime.onInstalled.addListener(() => {
     chrome.storage.sync.get({
         modelProvider: 'lmstudio',
@@ -7,23 +10,49 @@ chrome.runtime.onInstalled.addListener(() => {
         modelName: 'local-model',
         extractionMode: 'translate',
         sourceLang: '',
-        targetLang: 'zh-TW',
+        targetLang: 'zh-TW', // Default target language
         glossary: '',
         autoClickPaste: false
     }, (items) => {
+        // Set default target language to browser's UI language on first install
+        if (items.targetLang === 'zh-TW') { // Only if it's still the hardcoded default
+            const browserLang = chrome.i18n.getUILanguage(); // e.g., "en-US", "ko", "zh-TW"
+            const primaryLang = browserLang.split('-')[0]; // e.g., "en", "ko", "zh"
+
+            let detectedTargetLang = 'zh-TW'; // Fallback default
+
+            const supportedLangs = [
+                'en', 'ko', 'ja', 'zh-CN', 'zh-TW', 'de', 'es', 'fr', 'it', 'pt', 'ru', 'vi'
+            ];
+
+            if (supportedLangs.includes(browserLang)) {
+                detectedTargetLang = browserLang;
+            } else if (supportedLangs.includes(primaryLang)) {
+                detectedTargetLang = primaryLang;
+            } else if (primaryLang === 'zh') {
+                // Special handling for Chinese variants
+                if (browserLang === 'zh-TW') {
+                    detectedTargetLang = 'zh-TW';
+                } else {
+                    detectedTargetLang = 'zh-CN'; // Default to simplified if just 'zh' or other variant
+                }
+            }
+            items.targetLang = detectedTargetLang;
+        }
         chrome.storage.sync.set(items);
     });
 });
 
 async function captureAndTranslate(request) {
+    let activeTab; // Declare activeTab outside try block
     try {
         const { area, coords } = request;
-        const activeTab = await getActiveTab();
+        activeTab = await getActiveTab(); // Assign here
         if (!activeTab) throw new Error("No active tab found.");
 
         const screenDataUrl = await chrome.tabs.captureVisibleTab(null, { format: 'png' });
         const settings = await chrome.storage.sync.get([
-            'modelProvider', 'apiKey', 'modelName', // New model settings
+            'modelProvider', 'apiKey', 'modelName',
             'extractionMode', 'sourceLang', 'targetLang', 'glossary', 'autoClickPaste'
         ]);
 
@@ -32,7 +61,6 @@ async function captureAndTranslate(request) {
             throw new Error("Failed to crop a valid image.");
         }
 
-        // callLlmApi now returns the parsed text directly
         const resultText = await callLlmApi(croppedDataUrl, settings);
         if (!resultText) throw new Error("Result text is empty.");
 
@@ -56,6 +84,51 @@ async function captureAndTranslate(request) {
 
     } catch (error) {
         console.error("OCR Translator Error:", error);
+
+        if (error.message && (error.message.includes("API call failed") || error.message.includes("API response did not contain expected text"))) {
+            const currentProvider = (await chrome.storage.sync.get('modelProvider')).modelProvider;
+            const currentModel = (await chrome.storage.sync.get('modelName')).modelName;
+            let fallbackModels = [];
+
+            if (currentProvider === 'gemini') {
+                fallbackModels = GEMINI_MODELS;
+            }
+
+            if (fallbackModels.length > 0) {
+                const currentIndex = fallbackModels.indexOf(currentModel);
+                const nextIndex = (currentIndex + 1) % fallbackModels.length;
+                const nextModel = fallbackModels[nextIndex];
+
+                if (nextModel !== currentModel) {
+                    await chrome.storage.sync.set({ modelName: nextModel });
+                    if (activeTab && activeTab.id) {
+                        chrome.tabs.sendMessage(activeTab.id, {
+                            action: 'showCustomToast',
+                            message: `모델 오류 발생! '${currentModel}'에서 '${nextModel}'로 자동 변경되었습니다.`, 
+                            duration: 5000
+                        });
+                    }
+                }
+            } else {
+                if (activeTab && activeTab.id) {
+                    chrome.tabs.sendMessage(activeTab.id, {
+                        action: 'showCustomToast',
+                        message: `모델 오류 발생! 모든 모델 시도 실패.`, 
+                        duration: 5000
+                    });
+                }
+            }
+        }
+
+        if (error.message && error.message.includes("429")) {
+            if (activeTab && activeTab.id) {
+                chrome.tabs.sendMessage(activeTab.id, {
+                    action: 'showCustomToast',
+                    message: '무료 체험 한도에 도달했습니다. (429 오류)', 
+                    duration: 5000
+                });
+            }
+        }
     }
 }
 
@@ -105,16 +178,13 @@ async function callLlmApi(imageDataUrl, settings) {
         case 'lmstudio':
             responseData = await _callLmStudioApi(imageDataUrl, settings);
             break;
-        case 'openai':
-            responseData = await _callOpenAIApi(imageDataUrl, settings);
-            break;
         case 'gemini':
             responseData = await _callGeminiApi(imageDataUrl, settings);
             break;
         default:
             throw new Error('Unsupported model provider: ' + settings.modelProvider);
     }
-    return responseData; // Now returns the parsed text
+    return responseData;
 }
 
 // --- Helper for LM Studio API Call ---
@@ -122,12 +192,15 @@ async function _callLmStudioApi(imageDataUrl, settings) {
     let systemPrompt = '';
     let userPrompt = '';
 
+    // Glossary is now processed at save time in options.js
+    const processedGlossary = settings.glossary ?? ''; // Ensure it's a string
+
     if (settings.extractionMode === 'ocr_only') {
         systemPrompt = `You are an expert at accurately extracting all text from an image.\nRules:\n1. Extract all text from the image.\n2. Output only the extracted text. Do not add any other explanations or introductory phrases.`;
         userPrompt = `Extract the text from this image.`;
     } else { // Default to translate
         systemPrompt = `당신은 이미지 속 텍스트를 정확히 추출하고, 지정된 언어로 번역하는 전문가입니다.\n규칙:\n1. 이미지에서 모든 텍스트를 추출합니다.\n2. 출발언어가 지정되지 않으면 자동 감지합니다.\n3. 대상언어로 번역합니다. (기본: 繁體中文)\n4. 번역 시 아래 용어집을 반드시 반영합니다.\n5. 출력은 번역문만 제공합니다. 불필요한 설명은 제거합니다.`;
-        userPrompt = `출발언어: ${settings.sourceLang || '자동 감지'}\n대상언어: ${settings.targetLang || '繁體中文'}\n용어집:\n${settings.glossary}`;
+        userPrompt = `출발언어: ${settings.sourceLang || '자동 감지'}\n대상언어: ${settings.targetLang || '繁體中文'}\n용어집:\n${processedGlossary}`;
     }
 
     const response = await fetch("http://192.168.219.107:1234/v1/chat/completions", {
@@ -150,58 +223,7 @@ async function _callLmStudioApi(imageDataUrl, settings) {
     });
 
     if (!response.ok) {
-        const errorBody = await response.text();
-        throw new Error(`LM Studio API call failed with status: ${response.status}. Body: ${errorBody}`);
-    }
-    const jsonResponse = await response.json();
-    return jsonResponse.choices[0].message.content.trim();
-}
-
-// --- Helper for OpenAI API Call ---
-async function _callOpenAIApi(imageDataUrl, settings) {
-    if (!settings.apiKey) {
-        throw new Error("OpenAI API Key is not set in extension settings.");
-    }
-    if (!settings.modelName) {
-        throw new Error("OpenAI Model Name is not set in extension settings.");
-    }
-
-    let systemPrompt = '';
-    let userPrompt = '';
-
-    if (settings.extractionMode === 'ocr_only') {
-        systemPrompt = `You are an expert at accurately extracting all text from an image.\nRules:\n1. Extract all text from the image.\n2. Output only the extracted text. Do not add any other explanations or introductory phrases.`;
-        userPrompt = `Extract the text from this image.`;
-    } else {
-        systemPrompt = `You are an expert at accurately extracting text from images and translating it into the specified language.\nRules:\n1. Extract all text from the image.\n2. If a source language is not specified, auto-detect it.\n3. Translate to the target language. (Default: Traditional Chinese)\n4. Strictly apply the glossary below during translation.\n5. Provide only the translated text as output. Remove any unnecessary explanations.`;
-        userPrompt = `Source Language: ${settings.sourceLang || 'Auto-detect'}\nTarget Language: ${settings.targetLang || 'Traditional Chinese'}\nGlossary:\n${settings.glossary}`;
-    }
-
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${settings.apiKey}`
-        },
-        body: JSON.stringify({
-            model: settings.modelName,
-            messages: [
-                { role: "system", content: systemPrompt },
-                {
-                    role: "user",
-                    content: [
-                        { type: "text", text: userPrompt },
-                        { type: "image_url", image_url: { url: imageDataUrl } }
-                    ]
-                }
-            ],
-            stream: false
-        })
-    });
-
-    if (!response.ok) {
-        const errorBody = await response.text();
-        throw new Error(`OpenAI API call failed with status: ${response.status}. Body: ${errorBody}`);
+        throw new Error(`LM Studio API call failed with status: ${response.status}.`);
     }
     const jsonResponse = await response.json();
     return jsonResponse.choices[0].message.content.trim();
@@ -221,12 +243,15 @@ async function _callGeminiApi(imageDataUrl, settings) {
 
     let userPromptParts = [];
 
+    // Glossary is now processed at save time in options.js
+    const processedGlossary = settings.glossary ?? ''; // Ensure it's a string
+
     if (settings.extractionMode === 'ocr_only') {
         userPromptParts.push({ text: `You are an expert at accurately extracting all text from an image. Rules: 1. Extract all text from the image. 2. Output only the extracted text. Do not add any other explanations or introductory phrases.` });
         userPromptParts.push({ text: `Extract the text from this image.` });
     } else {
         userPromptParts.push({ text: `You are an expert at accurately extracting text from images and translating it into the specified language. Rules: 1. Extract all text from the image. 2. If a source language is not specified, auto-detect it. 3. Translate to the target language. (Default: Traditional Chinese) 4. Strictly apply the glossary below during translation. 5. Provide only the translated text as output. Remove any unnecessary explanations.` });
-        userPromptParts.push({ text: `Source Language: ${settings.sourceLang || 'Auto-detect'}\nTarget Language: ${settings.targetLang || 'Traditional Chinese'}\nGlossary:\n${settings.glossary}` });
+        userPromptParts.push({ text: `Source Language: ${settings.sourceLang || 'Auto-detect'}\nTarget Language: ${settings.targetLang || 'Traditional Chinese'}\nGlossary:\n${processedGlossary}` });
     }
 
     userPromptParts.push({
@@ -247,11 +272,9 @@ async function _callGeminiApi(imageDataUrl, settings) {
     });
 
     if (!response.ok) {
-        const errorBody = await response.text();
-        throw new Error(`Gemini API call failed with status: ${response.status}. Body: ${errorBody}`);
+        throw new Error(`Gemini API call failed with status: ${response.status}.`);
     }
     const jsonResponse = await response.json();
-    // Gemini response parsing
     if (jsonResponse.candidates && jsonResponse.candidates.length > 0 &&
         jsonResponse.candidates[0].content && jsonResponse.candidates[0].content.parts &&
         jsonResponse.candidates[0].content.parts.length > 0 && jsonResponse.candidates[0].content.parts[0].text) {

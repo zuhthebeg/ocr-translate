@@ -152,7 +152,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             });
             elementToClick.dispatchEvent(clickEvent);
 
-            // Wait 1 second, then find the active element and paste into it.
             setTimeout(async () => {
                 try {
                     const textToPaste = await navigator.clipboard.readText();
@@ -173,5 +172,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         } else {
             console.error("[OCR] Could not find an element to click at the specified coordinates.");
         }
+    } else if (request.action === 'showCustomToast') {
+        showToast(request.message, request.duration);
     }
 });

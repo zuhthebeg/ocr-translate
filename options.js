@@ -10,8 +10,15 @@ function save_options() {
         autoClickPaste: document.getElementById('autoClickPaste').checked
     }, function() {
         const status = document.getElementById('status');
-        status.textContent = 'Options saved.';
-        setTimeout(() => { status.textContent = ''; }, 1500);
+        if (chrome.runtime.lastError) {
+            status.textContent = 'Error saving options: ' + chrome.runtime.lastError.message;
+            status.style.color = 'red';
+            console.error('Error saving options:', chrome.runtime.lastError);
+        } else {
+            status.textContent = 'Options saved.';
+            status.style.color = 'green';
+        }
+        setTimeout(() => { status.textContent = ''; status.style.color = ''; }, 3000);
     });
 }
 
@@ -19,7 +26,7 @@ function restore_options() {
     chrome.storage.sync.get({
         modelProvider: 'lmstudio',
         apiKey: '',
-        modelName: 'local-model',
+        modelName: 'gemini-2.5-pro', // Default to a valid model
         extractionMode: 'translate',
         sourceLang: '',
         targetLang: 'zh-TW',
@@ -42,12 +49,29 @@ function restore_options() {
 function updateUI(provider) {
     const apiKeyGroup = document.getElementById('apiKeyGroup');
     const modelNameGroup = document.getElementById('modelNameGroup');
+    const modelNameSelect = document.getElementById('modelName'); // Get the select element
+
+    // Clear existing options first
+    modelNameSelect.innerHTML = '';
+
     if (provider === 'lmstudio') {
         apiKeyGroup.classList.add('hidden');
         modelNameGroup.classList.add('hidden');
-    } else {
+        // LM Studio uses a generic local-model name
+        modelNameSelect.innerHTML = '<option value="local-model">local-model</option>';
+    } else if (provider === 'gemini') {
         apiKeyGroup.classList.remove('hidden');
         modelNameGroup.classList.remove('hidden');
+        // Specific options for Gemini models
+        modelNameSelect.innerHTML = `
+            <option value="gemini-2.5-pro">gemini-2.5-pro</option>
+            <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+            <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
+        `;
+    } else { // Fallback for any other future providers
+        apiKeyGroup.classList.remove('hidden');
+        modelNameGroup.classList.remove('hidden');
+        modelNameSelect.innerHTML = '<option value="">Select Model</option>';
     }
 }
 
