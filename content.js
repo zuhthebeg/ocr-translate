@@ -5,7 +5,7 @@ let startX, startY;
 let overlay = null;
 const DRAG_THRESHOLD = 5; // Minimum pixels to move to be considered a drag
 
-console.log("[OCR] Content script loaded.");
+//console.log("[OCR] Content script loaded.");
 
 // --- UI Management ---
 function showToast(message, duration = 3000) {

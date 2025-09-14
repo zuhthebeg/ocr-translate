@@ -62,7 +62,7 @@ chrome.runtime.onInstalled.addListener(() => {
 async function captureAndTranslate(request) {
     let activeTab;
     try {
-        console.log("[OCR BG] Starting captureAndTranslate.");
+        //console.log("[OCR BG] Starting captureAndTranslate.");
         const { area, coords } = request;
         activeTab = await getActiveTab();
         if (!activeTab) throw new Error("No active tab found.");
@@ -76,14 +76,14 @@ async function captureAndTranslate(request) {
         const { glossary } = await chrome.storage.local.get('glossary');
         settings.glossary = glossary; // Combine settings
 
-        console.log("[OCR BG] Settings loaded:", settings);
+        //console.log("[OCR BG] Settings loaded:", settings);
 
         const croppedDataUrl = await cropImage(screenDataUrl, area);
 
         if (!croppedDataUrl || croppedDataUrl === 'data:,') {
             throw new Error("Failed to crop a valid image.");
         }
-        console.log("[OCR BG] Image cropped.");
+        //console.log("[OCR BG] Image cropped.");
 
         // Validate request size
         const imageSizeInBytes = Math.ceil(croppedDataUrl.length * (3 / 4));
@@ -104,10 +104,10 @@ async function captureAndTranslate(request) {
         const MAX_RETRIES = 1;
         for (let i = 0; i <= MAX_RETRIES; i++) {
             try {
-                console.log(`[OCR BG] Attempt ${i + 1} to call LLM API.`);
+                //console.log(`[OCR BG] Attempt ${i + 1} to call LLM API.`);
                 resultText = await callLlmApi(croppedDataUrl, settings);
                 if (resultText) {
-                    console.log("[OCR BG] API call successful.");
+                    //console.log("[OCR BG] API call successful.");
                     break;
                 }
             } catch (apiError) {
@@ -127,23 +127,23 @@ async function captureAndTranslate(request) {
             func: copyToClipboard,
             args: [resultText]
         });
-        console.log("[OCR BG] Text copied to clipboard.");
+        //console.log("[OCR BG] Text copied to clipboard.");
 
         chrome.tabs.sendMessage(activeTab.id, { 
             action: 'translationSuccess', 
             text: resultText 
         });
-        console.log("[OCR BG] Translation success message sent.");
+        //console.log("[OCR BG] Translation success message sent.");
 
         // Perform action based on user setting
-        console.log(`[OCR BG] Performing result action: ${settings.resultAction}`);
+        //console.log(`[OCR BG] Performing result action: ${settings.resultAction}`);
         switch (settings.resultAction) {
             case 'paste':
                 chrome.tabs.sendMessage(activeTab.id, {
                     action: 'autoClickPaste',
                     coords: { x: coords.startX, y: coords.startY }
                 });
-                console.log("[OCR BG] Auto-click-paste message sent.");
+                //console.log("[OCR BG] Auto-click-paste message sent.");
                 break;
             case 'popup':
                 chrome.tabs.sendMessage(activeTab.id, {
@@ -151,7 +151,7 @@ async function captureAndTranslate(request) {
                     text: resultText,
                     coords: { startX: coords.startX, startY: coords.startY }
                 });
-                console.log("[OCR BG] Show result popup message sent.");
+                //console.log("[OCR BG] Show result popup message sent.");
                 break;
         }
     } catch (error) {
