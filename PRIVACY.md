@@ -1,35 +1,49 @@
 # Privacy Policy for OCR Translator
 
-**Last Updated:** 2025-09-15
+Last Updated: 2025-09-14
 
-Thank you for using OCR Translator. This privacy policy explains how we handle your information when you use our extension.
+Thank you for using OCR Translator. This privacy policy explains what data the extension handles and why. Our core principle is to protect your privacy by processing everything locally on your computer.
 
-### 1. Information We Collect and How We Use It
+## 1. Single Purpose of the Extension
 
-Our extension is designed with your privacy in mind. We only process data to provide the core functionality of the service.
+The single purpose of "OCR Translator" is to **allow the user to capture a specific area of their screen, recognize the text within it (OCR), and provide a translation.** All features and data handling are strictly limited to achieving this purpose.
 
-*   **Screen Capture Data:** When you select an area of your screen, an image of that specific area is captured. This image is sent directly to the Language Model (LLM) API you have configured (either Google Gemini via your own API key, or a local server address you provide) for Optical Character Recognition (OCR) and translation. **This image data is processed in memory and is NOT stored, logged, or collected by our servers.**
+## 2. Data Handling and Prominent Disclosure
 
-*   **Glossary and Settings:** All your settings, including API keys, language preferences, and glossary terms, are stored locally on your computer using Chrome's built-in storage (`chrome.storage`). Your API key is stored in a password field but is managed entirely by your browser. **This information is never transmitted to our servers.**
+To comply with the User Data Policy, we provide this clear disclosure about the data the extension handles.
 
-### 2. Data Transmission
+**No Data is Collected or Transmitted Externally.**
 
-To perform the translation, the following data is sent to the API endpoint you have configured:
+This extension is designed for complete privacy. **We do not collect, store, or transmit any of your personal data or on-screen content to any external servers.** All processing happens locally on your computer.
 
-*   The captured image data (as a Base64 string).
-*   Your selected source and target languages.
-*   Your glossary terms (if configured).
+Here is a breakdown of how data is handled internally:
 
-If you use the "User API Key Mode" (e.g., for Google Gemini), this data is sent directly from your browser to Google's servers, governed by Google's own privacy policy. If you use the "Local Server Mode", this data is sent to the address you specify.
+*   **Screen Capture Data:** When you select an area of your screen, the extension takes a screenshot of only that specific area. This image data is held temporarily in your computer's memory. It is **never** sent over the internet.
+*   **Recognized Text (OCR):** The captured image is processed locally to recognize text. This text is then used for translation.
+*   **Translated Text:** The recognized text is sent to a local language model (LLM) running on your own machine for translation.
 
-### 3. Data Storage and Security
+## 3. Justification for Permissions
 
-We do not operate a central server that stores your personal data or translation history. All settings are stored locally within your Chrome browser profile.
+The extension requests certain permissions only to enable its core functionality.
 
-### 4. Changes to This Privacy Policy
+*   `activeTab` / `scripting` / `<all_urls>`: These permissions are required to enable the screen capture functionality on any webpage you visit. The extension needs to draw a selection box over the web page and capture the selected area. No data from the pages is read or stored.
+*   `storage`: This permission is used to save your settings, such as your preferred translation language, locally on your browser.
+*   `clipboardWrite` / `clipboardRead`: These permissions are used to provide the convenience of copying the translated text to your clipboard or pasting text for translation.
+*   `offscreen`: This is used to run the OCR and translation tasks in a background process on your machine, ensuring the web page you are on does not slow down.
 
-We may update this privacy policy from time to time. We will notify you of any changes by posting the new privacy policy in the extension's description on the Chrome Web Store.
+## 4. Secure Handling and Localhost Communication
 
-### 5. Contact Us
+This section directly addresses the "Secure Handling" policy.
 
-If you have any questions about this privacy policy, you can contact the developer at: **cocy@kakao.com**
+The extension communicates with a local server at `http://localhost:1234/` to access the local AI model for translation.
+
+*   **Why HTTP is Used:** The connection is to `localhost`, which is a special address that always points to your own computer. This is **not an external internet address.**
+*   **Is it Secure?** Yes. Because the data transfer occurs entirely within your own computer (from the browser extension to a local program), it does not travel over the public internet and is therefore not exposed to network sniffing or interception. It is an offline, local-only operation.
+*   **No User Data Transmitted:** The only data sent to this local address is the text recognized from your screen capture, for the sole purpose of translation by the local AI model.
+
+We use this method to provide powerful AI translation features without compromising your privacy by sending data to the cloud.
+
+By using the OCR Translator extension, you consent to the data handling practices described in this policy, which are all performed locally on your computer.
+
+---
+Contact: If you have any questions about this privacy policy, please contact us at [Your-Email-Here].
